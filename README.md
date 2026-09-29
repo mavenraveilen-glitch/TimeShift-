@@ -40,3 +40,12 @@ Deploy ke Vercel: drag-and-drop folder ini ke project static hosting mana pun.
 
 - Three.js r128 dimuat dari CDN (cdnjs). Semua geometry, texture (canvas-generated), dan material bersifat prosedural — tidak ada dependensi asset eksternal.
 - Prioritas visual: realistic lighting (ACES tone mapping, soft shadows, FogExp2) > atmosphere > UI minimal glassmorphism.
+
+## Update — visual & performance polish
+
+- **Logo mark** (sun + soft horizon) on loader & HUD — relaxed symbol language.
+- **Mode buttons** use soft period icons (clock / sunrise / sun / sunset / moon).
+- **Camera inertia** on drag release for lag-free sliding; softer damping.
+- **Layered tree canopies** (dual instanced cones) for richer silhouettes.
+- **Shadow map throttling** after warm-up — shadows only rebuild when the sun angle changes, keeping drag FPS high.
+- **Firefly updates** every other frame; WebGL-fail overlay respects `[hidden]`.

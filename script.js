@@ -70,18 +70,36 @@ scene.fog = new THREE.FogExp2(0x0a1020, 0.003);
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 2200);
 
-// ---------- Kustom orbit controls (drag / wheel / pinch, drift idle) ----------
+// ---------- Kustom orbit controls (drag / wheel / pinch, inertia + drift) ----------
 const camState = { theta: -Math.PI / 2, phi: 1.22, radius: 58, target: new THREE.Vector3(0, 4, 0) };
 const camGoal  = { theta: -Math.PI / 2, phi: 1.22, radius: 58 };
+const camVel   = { theta: 0, phi: 0, radius: 0 }; // inertia on release → no laggy stop
 let lastInteract = -10;
 let idleT = 0;
+let dragging = false;
 
 function applyCamera(dt) {
+  const now = performance.now() / 1000;
+  // apply residual velocity when not actively dragging (smooth slide)
+  if (!dragging) {
+    camGoal.theta += camVel.theta * dt;
+    camGoal.phi = clamp(camGoal.phi + camVel.phi * dt, 0.32, 1.48);
+    camGoal.radius = clamp(camGoal.radius + camVel.radius * dt, 18, 150);
+    const damp = Math.exp(-5.5 * dt);
+    camVel.theta *= damp;
+    camVel.phi *= damp;
+    camVel.radius *= damp;
+  } else {
+    camVel.theta *= 0.6;
+    camVel.phi *= 0.6;
+    camVel.radius *= 0.6;
+  }
   // cinematic drift saat idle
-  if (performance.now() / 1000 - lastInteract > 4) idleT += dt; else idleT = 0;
-  const drift = Math.min(idleT / 6, 1) * 0.022;
+  if (now - lastInteract > 4) idleT += dt; else idleT = 0;
+  const drift = Math.min(idleT / 6, 1) * 0.018;
   camGoal.theta += drift * dt;
-  const k = 1 - Math.pow(0.0001, dt); // smoothing eksponensial
+  // softer exponential smoothing — less rubber-band lag
+  const k = 1 - Math.pow(0.0004, dt);
   camState.theta += (camGoal.theta - camState.theta) * k;
   camState.phi   += (camGoal.phi   - camState.phi)   * k;
   camState.radius+= (camGoal.radius- camState.radius)* k;
@@ -91,8 +109,7 @@ function applyCamera(dt) {
     camState.target.y + camState.radius * cp,
     camState.target.z + camState.radius * sp * Math.cos(camState.theta)
   );
-  // subtle breathing
-  camera.position.y += Math.sin(performance.now() / 1000 * 0.4) * 0.15 * Math.min(idleT, 1);
+  camera.position.y += Math.sin(now * 0.4) * 0.12 * Math.min(idleT, 1);
   camera.lookAt(camState.target);
 }
 
@@ -105,8 +122,9 @@ dom.addEventListener('pointerdown', (e) => {
     const p = [...pointers.values()];
     pinchDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
   }
+  dragging = true;
   lastInteract = performance.now() / 1000;
-  dom.setPointerCapture(e.pointerId);
+  try { dom.setPointerCapture(e.pointerId); } catch (_) {}
 });
 dom.addEventListener('pointermove', (e) => {
   if (!pointers.has(e.pointerId)) return;
@@ -115,21 +133,37 @@ dom.addEventListener('pointermove', (e) => {
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   lastInteract = performance.now() / 1000;
   if (pointers.size === 1) {
-    camGoal.theta -= dx * 0.0045;
-    camGoal.phi = clamp(camGoal.phi - dy * 0.0032, 0.32, 1.48);
+    const dTh = -dx * 0.005;
+    const dPh = -dy * 0.0035;
+    camGoal.theta += dTh;
+    camGoal.phi = clamp(camGoal.phi + dPh, 0.32, 1.48);
+    // accumulate velocity for inertia (pixels → rad/s estimate)
+    camVel.theta = dTh * 55;
+    camVel.phi = dPh * 55;
   } else if (pointers.size === 2) {
     const p = [...pointers.values()];
     const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
-    if (pinchDist > 0) camGoal.radius = clamp(camGoal.radius * (pinchDist / d), 18, 150);
+    if (pinchDist > 0) {
+      const ratio = pinchDist / d;
+      const next = clamp(camGoal.radius * ratio, 18, 150);
+      camVel.radius = (next - camGoal.radius) * 40;
+      camGoal.radius = next;
+    }
     pinchDist = d;
   }
 });
-const endPointer = (e) => { pointers.delete(e.pointerId); pinchDist = 0; };
+const endPointer = (e) => {
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) { dragging = false; pinchDist = 0; }
+  else if (pointers.size === 1) pinchDist = 0;
+};
 dom.addEventListener('pointerup', endPointer);
 dom.addEventListener('pointercancel', endPointer);
 dom.addEventListener('wheel', (e) => {
   e.preventDefault();
-  camGoal.radius = clamp(camGoal.radius * (1 + e.deltaY * 0.0009), 18, 150);
+  const next = clamp(camGoal.radius * (1 + e.deltaY * 0.00085), 18, 150);
+  camVel.radius = (next - camGoal.radius) * 30;
+  camGoal.radius = next;
   lastInteract = performance.now() / 1000;
 }, { passive: false });
 
@@ -250,7 +284,9 @@ dirLight.shadow.camera.near = 10; dirLight.shadow.camera.far = 500;
 const sc = 130;
 dirLight.shadow.camera.left = -sc; dirLight.shadow.camera.right = sc;
 dirLight.shadow.camera.top = sc; dirLight.shadow.camera.bottom = -sc;
-dirLight.shadow.bias = -0.0006;
+dirLight.shadow.bias = -0.0008;
+dirLight.shadow.normalBias = 0.04;
+dirLight.shadow.autoUpdate = true; // toggled off when env settles (perf)
 scene.add(dirLight);
 scene.add(dirLight.target);
 
@@ -282,7 +318,7 @@ terGeo.rotateX(-Math.PI / 2);
   terGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   terGeo.computeVertexNormals();
 }
-const terMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0 });
+const terMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.02 });
 const terrain = new THREE.Mesh(terGeo, terMat);
 terrain.receiveShadow = true;
 scene.add(terrain);
@@ -309,8 +345,8 @@ scene.add(makeRidge(isMobile ? 10 : 16, 380, 480, 120, 260, 0x7a86a0));  // ridg
 
 // ---------- Danau ----------
 const waterMat = new THREE.MeshStandardMaterial({
-  color: 0x17394f, roughness: 0.08, metalness: 0.85,
-  transparent: true, opacity: 0.94
+  color: 0x1a4560, roughness: 0.06, metalness: 0.88,
+  transparent: true, opacity: 0.92
 });
 const water = new THREE.Mesh(new THREE.CircleGeometry(LAKE.r - 0.5, 40), waterMat);
 water.rotation.x = -Math.PI / 2;
@@ -344,14 +380,20 @@ function addSway(mat, strength) {
 }
 const trunkGeo = new THREE.CylinderGeometry(0.22, 0.38, 2.6, 6);
 trunkGeo.translate(0, 1.3, 0);
-const canopyGeo = new THREE.ConeGeometry(1.9, 5.2, 7);
-canopyGeo.translate(0, 5.0, 0);
+// layered canopy for richer silhouette (still instanced / cheap)
+const canopyGeoA = new THREE.ConeGeometry(2.05, 4.4, 7);
+canopyGeoA.translate(0, 4.55, 0);
+const canopyGeoB = new THREE.ConeGeometry(1.45, 3.4, 7);
+canopyGeoB.translate(0, 6.35, 0);
 const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a4630, roughness: 0.95 });
-const canopyMat = new THREE.MeshStandardMaterial({ color: 0x2f5d2a, roughness: 0.9 });
-addSway(canopyMat, 0.035);
+const canopyMatA = new THREE.MeshStandardMaterial({ color: 0x2c5828, roughness: 0.88 });
+const canopyMatB = new THREE.MeshStandardMaterial({ color: 0x3a6e32, roughness: 0.86 });
+addSway(canopyMatA, 0.032);
+addSway(canopyMatB, 0.042);
 const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, Q.trees);
-const canopies = new THREE.InstancedMesh(canopyGeo, canopyMat, Q.trees);
-trunks.castShadow = canopies.castShadow = true;
+const canopiesA = new THREE.InstancedMesh(canopyGeoA, canopyMatA, Q.trees);
+const canopiesB = new THREE.InstancedMesh(canopyGeoB, canopyMatB, Q.trees);
+trunks.castShadow = canopiesA.castShadow = canopiesB.castShadow = true;
 {
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), v = new THREE.Vector3();
   const axisY = new THREE.Vector3(0, 1, 0);
@@ -366,11 +408,12 @@ trunks.castShadow = canopies.castShadow = true;
     v.set(x, terrainH(x, z) - 0.15, z);
     m.compose(v, q, s);
     trunks.setMatrixAt(placed, m);
-    canopies.setMatrixAt(placed, m);
+    canopiesA.setMatrixAt(placed, m);
+    canopiesB.setMatrixAt(placed, m);
     placed++;
   }
 }
-scene.add(trunks, canopies);
+scene.add(trunks, canopiesA, canopiesB);
 
 // ---------- Batu ----------
 const rockGeo = new THREE.DodecahedronGeometry(1, 0);
@@ -676,6 +719,7 @@ setInterval(updateClock, 1000);
 const sunDirV = new THREE.Vector3();
 const moonDirV = new THREE.Vector3(-0.45, 0.72, -0.40).normalize();
 const winDark = new THREE.Color(0x232630), winWarm = new THREE.Color(0xffc873);
+let _lastShadowHour = -999;
 function applyEnv(E, t) {
   // posisi matahari: terbit timur (+X) 6:00, terbenam barat (-X) 18:00
   const az = (envHour - 6) / 12 * Math.PI;
@@ -693,6 +737,11 @@ function applyEnv(E, t) {
     dirLight.intensity = 0.42;
   }
   dirLight.target.position.set(0, 0, 0);
+  // only rebuild shadow map when sun/moon angle moved enough (smooth drag FPS)
+  if (Math.abs(envHour - _lastShadowHour) > 0.08) {
+    dirLight.shadow.needsUpdate = true;
+    _lastShadowHour = envHour;
+  }
 
   hemi.color.copy(E.hs);
   hemi.groundColor.copy(E.hg);
@@ -772,7 +821,8 @@ function animate() {
       u.wl.rotation.z = flap; u.wr.rotation.z = -flap;
     }
   }
-  if (ffMat.opacity > 0.01) {
+  // fireflies: update every other frame to keep drag smooth
+  if (ffMat.opacity > 0.01 && (frames & 1) === 0) {
     const p = ffGeo.attributes.position;
     for (let i = 0; i < Q.fireflies; i++) {
       p.array[i * 3]     = ffBase[i * 3]     + Math.sin(t * 0.9 + i * 1.7) * 1.1;
@@ -790,6 +840,9 @@ function animate() {
   frames++;
   if (frames === 1) loaderFill.style.width = '100%';
   if (frames === 8) loaderEl.classList.add('done');
+  // after warm-up: only update shadows when light angle changes (saves GPU while dragging)
+  if (frames === 30) dirLight.shadow.autoUpdate = false;
+
   if (!qualityDropped) {
     fpsTime += dt;
     if (frames === 240) {
@@ -799,6 +852,7 @@ function animate() {
         renderer.setPixelRatio(1);
         if (dirLight.shadow.map) { dirLight.shadow.map.dispose(); dirLight.shadow.map = null; }
         dirLight.shadow.mapSize.set(512, 512);
+        dirLight.shadow.needsUpdate = true;
       }
     }
   }
