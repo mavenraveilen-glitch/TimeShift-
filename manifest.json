@@ -1,0 +1,17 @@
+{
+  "name": "TimeShift 3D",
+  "short_name": "TimeShift",
+  "description": "A calm 3D world that follows your local time.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#060a14",
+  "theme_color": "#0a1020",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='28' r='12' fill='%23ffc873'/%3E%3Cpath d='M8 44c8-10 16-14 24-14s16 4 24 14' fill='none' stroke='%23eef2f8' stroke-width='3' stroke-linecap='round' opacity='.55'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

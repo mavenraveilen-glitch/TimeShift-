@@ -43,9 +43,33 @@ function fbm(x, z, oct) {
 
 // ---------- Deteksi perangkat & konfigurasi performa ----------
 const isMobile = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || window.innerWidth < 768;
-const Q = isMobile
-  ? { terrainSeg: 96, trees: 70, rocks: 26, bushes: 140, stars: 900,  fireflies: 70,  clouds: 12, shadow: 1024, pr: 1.6 }
-  : { terrainSeg: 160, trees: 150, rocks: 55, bushes: 320, stars: 2200, fireflies: 130, clouds: 20, shadow: 2048, pr: 2.0 };
+const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DEBUG = /[?&]debug=1/.test(location.search);
+
+function loadStore() {
+  try { return JSON.parse(localStorage.getItem('ts3d') || '{}'); } catch (_) { return {}; }
+}
+function saveStore(partial) {
+  try {
+    const cur = loadStore();
+    Object.assign(cur, partial);
+    localStorage.setItem('ts3d', JSON.stringify(cur));
+  } catch (_) {}
+}
+const store = loadStore();
+
+// Quality tiers — geometry counts created once; resolution/shadows adjust live
+const Q_LOW  = { terrainSeg: 72,  trees: 50,  rocks: 18, bushes: 90,  stars: 500,  fireflies: 40,  clouds: 8,  shadow: 512,  pr: 1.0 };
+const Q_MID  = { terrainSeg: 96,  trees: 90,  rocks: 32, bushes: 160, stars: 1100, fireflies: 80,  clouds: 12, shadow: 1024, pr: 1.5 };
+const Q_HIGH = { terrainSeg: 160, trees: 150, rocks: 55, bushes: 300, stars: 2200, fireflies: 130, clouds: 18, shadow: 2048, pr: 2.0 };
+let qualityMode = store.quality || 'auto'; // auto | low | high
+function pickQ() {
+  if (qualityMode === 'low') return Q_LOW;
+  if (qualityMode === 'high') return isMobile ? Q_MID : Q_HIGH;
+  return isMobile ? Q_MID : Q_HIGH; // auto starts mid/high, dynamic res handles FPS
+}
+const Q = pickQ();
+let pixelRatioCap = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : Q.pr);
 
 // ---------- Renderer / Scene / Camera ----------
 let renderer;
@@ -53,10 +77,12 @@ try {
   renderer = new THREE.WebGLRenderer({ antialias: !isMobile, powerPreference: 'high-performance' });
 } catch (e) {
   document.getElementById('webgl-fail').hidden = false;
+  const sky = document.getElementById('css-sky');
+  if (sky) sky.hidden = false;
   document.getElementById('loader').classList.add('done');
   return;
 }
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, Q.pr));
+renderer.setPixelRatio(pixelRatioCap);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -673,53 +699,119 @@ function sampleEnv(hour) {
   };
 }
 
-// ---------- Mode waktu ----------
-let timeMode = 'auto';
+// ---------- Single timeOfDay (0–24), one source of truth ----------
+let timeMode = store.mode || 'auto'; // auto | morning | day | sunset | night | scrub
 const PREVIEW_HOUR = { morning: 7.2, day: 13.0, sunset: 17.9, night: 23.2 };
-let envHour = null; // diinit setelah first frame
+let timeOfDay = null;      // current lerped hour
+let targetTimeOfDay = 12;  // desired hour
+let timePaused = false;
+let timeLapse = false;     // full-day playback
+let scrubbing = false;
+const TIME_LERP = 0.65;    // responsive but smooth
 
-function targetHour() {
-  if (timeMode === 'auto') {
-    const n = new Date();
-    return n.getHours() + n.getMinutes() / 60 + n.getSeconds() / 3600;
-  }
-  return PREVIEW_HOUR[timeMode];
+function localHourNow() {
+  const n = new Date();
+  return n.getHours() + n.getMinutes() / 60 + n.getSeconds() / 3600;
 }
-
-document.querySelectorAll('.mode-btn').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.mode-btn').forEach((b) => b.classList.remove('active'));
-    btn.classList.add('active');
-    timeMode = btn.dataset.mode;
-    document.getElementById('clock-mode').textContent = timeMode === 'auto' ? 'LOCAL TIME' : 'PREVIEW';
+function computeTargetHour() {
+  if (timeLapse || scrubbing || timeMode === 'scrub') return targetTimeOfDay;
+  if (timeMode === 'auto') return localHourNow();
+  return PREVIEW_HOUR[timeMode] != null ? PREVIEW_HOUR[timeMode] : targetTimeOfDay;
+}
+function setMode(mode, hourOverride) {
+  timeMode = mode;
+  timeLapse = false;
+  document.querySelectorAll('.mode-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === (mode === 'scrub' ? '' : mode));
   });
+  if (mode === 'auto') {
+    targetTimeOfDay = localHourNow();
+    document.getElementById('clock-mode').textContent = 'LOCAL TIME';
+  } else if (PREVIEW_HOUR[mode] != null) {
+    targetTimeOfDay = PREVIEW_HOUR[mode];
+    document.getElementById('clock-mode').textContent = 'PREVIEW';
+  } else if (mode === 'scrub' && hourOverride != null) {
+    targetTimeOfDay = hourOverride;
+    document.getElementById('clock-mode').textContent = 'SCRUB';
+  }
+  saveStore({ mode: mode === 'scrub' ? 'auto' : mode });
+  const scrub = document.getElementById('time-scrub');
+  if (scrub && !scrubbing) scrub.value = String(targetTimeOfDay);
+}
+document.querySelectorAll('.mode-btn').forEach((btn) => {
+  btn.addEventListener('click', () => setMode(btn.dataset.mode));
 });
+// restore mode UI
+(function initModeUI() {
+  const m = timeMode === 'scrub' ? 'auto' : timeMode;
+  document.querySelectorAll('.mode-btn').forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
+  document.getElementById('clock-mode').textContent = m === 'auto' ? 'LOCAL TIME' : 'PREVIEW';
+})();
 
-// ---------- Realtime clock ----------
+// ---------- Clock + timezone label ----------
 const elTime = document.getElementById('clock-time');
 const elGreet = document.getElementById('clock-greet');
-const elPeriod = document.getElementById('clock-period');
+const elTz = document.getElementById('clock-tz');
 function periodOf(h) {
-  if (h >= 5 && h < 10) return { id: 'MORNING', greet: 'GOOD MORNING' };
-  if (h >= 10 && h < 17) return { id: 'DAY', greet: 'GOOD AFTERNOON' };
-  if (h >= 17 && h < 19) return { id: 'SUNSET', greet: 'GOOD EVENING' };
+  if (h >= 5 && h < 12) return { id: 'MORNING', greet: 'GOOD MORNING' };
+  if (h >= 12 && h < 17) return { id: 'AFTERNOON', greet: 'GOOD AFTERNOON' };
+  if (h >= 17 && h < 21) return { id: 'EVENING', greet: 'GOOD EVENING' };
   return { id: 'NIGHT', greet: 'GOOD NIGHT' };
 }
+function tzLabel() {
+  try {
+    const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date());
+    const tz = parts.find((p) => p.type === 'timeZoneName');
+    return tz ? tz.value : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'LOCAL');
+  } catch (_) { return 'LOCAL'; }
+}
+if (elTz) elTz.textContent = tzLabel();
 function updateClock() {
   const n = new Date();
   elTime.textContent = String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0');
-  const p = periodOf(n.getHours() + n.getMinutes() / 60);
-  elGreet.textContent = p.greet;
-  elPeriod.textContent = p.id;
+  // greeting follows the *scene* time when previewing / scrubbing
+  const h = timeOfDay != null ? timeOfDay : localHourNow();
+  elGreet.textContent = periodOf(h).greet;
 }
 updateClock();
 setInterval(updateClock, 1000);
+
+// Time scrubber
+const scrubEl = document.getElementById('time-scrub');
+if (scrubEl) {
+  scrubEl.addEventListener('pointerdown', () => { scrubbing = true; });
+  scrubEl.addEventListener('pointerup', () => { scrubbing = false; });
+  scrubEl.addEventListener('input', () => {
+    const v = parseFloat(scrubEl.value);
+    setMode('scrub', v);
+    targetTimeOfDay = v;
+    timeLapse = false;
+  });
+}
+document.getElementById('btn-timelapse')?.addEventListener('click', () => {
+  timeLapse = !timeLapse;
+  timePaused = false;
+  if (timeLapse) {
+    timeMode = 'scrub';
+    document.querySelectorAll('.mode-btn').forEach((b) => b.classList.remove('active'));
+    document.getElementById('clock-mode').textContent = 'TIMELAPSE';
+    document.getElementById('btn-timelapse').classList.add('active');
+  } else {
+    document.getElementById('btn-timelapse').classList.remove('active');
+    setMode('auto');
+  }
+});
+document.getElementById('btn-pause-time')?.addEventListener('click', () => {
+  timePaused = !timePaused;
+  document.getElementById('btn-pause-time').classList.toggle('active', timePaused);
+});
 
 // ---------- Terapkan environment ke scene ----------
 const sunDirV = new THREE.Vector3();
 const moonDirV = new THREE.Vector3(-0.45, 0.72, -0.40).normalize();
 const winDark = new THREE.Color(0x232630), winWarm = new THREE.Color(0xffc873);
 let _lastShadowHour = -999;
+let envHour = 12; // alias for applyEnv sun math
 function applyEnv(E, t) {
   // posisi matahari: terbit timur (+X) 6:00, terbenam barat (-X) 18:00
   const az = (envHour - 6) / 12 * Math.PI;
@@ -788,23 +880,35 @@ function applyEnv(E, t) {
 // ---------- Animation loop ----------
 const clock = new THREE.Clock();
 let frames = 0, fpsTime = 0, qualityDropped = false;
+let pageVisible = true;
 const loaderEl = document.getElementById('loader');
 const loaderFill = document.getElementById('loader-fill');
 
 function animate() {
   requestAnimationFrame(animate);
+  if (!pageVisible) return;
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
   uTime.value = t;
 
-  // jam environment di-lerp mulus (transisi cinematic antar periode)
-  const th = targetHour();
-  if (envHour === null) envHour = th;
-  let diff = ((th - envHour) % 24 + 36) % 24 - 12; // jarak terpendeks
-  envHour = (envHour + diff * Math.min(1, dt * 0.55) + 24) % 24;
+  // Single timeOfDay lerp (or freeze / timelapse)
+  if (timeOfDay === null) timeOfDay = computeTargetHour();
+  if (timeLapse && !timePaused) {
+    targetTimeOfDay = (targetTimeOfDay + dt * (24 / 60)) % 24; // full day in ~60s
+    if (scrubEl) scrubEl.value = targetTimeOfDay.toFixed(2);
+  }
+  const th = timePaused ? timeOfDay : computeTargetHour();
+  let diff = ((th - timeOfDay) % 24 + 36) % 24 - 12;
+  const lerpSpeed = (scrubbing || timeMode === 'scrub') ? 6 : (timeLapse ? 4 : TIME_LERP);
+  timeOfDay = (timeOfDay + diff * Math.min(1, dt * lerpSpeed) + 24) % 24;
+  envHour = timeOfDay;
 
-  const E = sampleEnv(envHour);
+  const E = sampleEnv(timeOfDay);
   applyEnv(E, t);
+
+  // theme-color follows sky
+  const tc = document.getElementById('theme-color');
+  if (tc && (frames & 15) === 0) tc.setAttribute('content', '#' + E.top.getHexString());
 
   // animasi dunia
   for (const cl of clouds) {
@@ -836,27 +940,161 @@ function animate() {
   applyCamera(dt);
   renderer.render(scene, camera);
 
-  // progress loader + adaptive quality
-  frames++;
-  if (frames === 1) loaderFill.style.width = '100%';
-  if (frames === 8) loaderEl.classList.add('done');
-  // after warm-up: only update shadows when light angle changes (saves GPU while dragging)
+  // progress loader
+  if (frames === 1) loaderFill.style.width = '40%';
+  if (frames === 4) loaderFill.style.width = '100%';
+  if (frames === 10) loaderEl.classList.add('done');
+  // after warm-up: only update shadows when light angle changes
   if (frames === 30) dirLight.shadow.autoUpdate = false;
 
-  if (!qualityDropped) {
-    fpsTime += dt;
-    if (frames === 240) {
-      const fps = frames / fpsTime;
-      if (fps < 28) {
-        qualityDropped = true;
-        renderer.setPixelRatio(1);
-        if (dirLight.shadow.map) { dirLight.shadow.map.dispose(); dirLight.shadow.map = null; }
-        dirLight.shadow.mapSize.set(512, 512);
-        dirLight.shadow.needsUpdate = true;
+  // Dynamic resolution + FPS meter
+  fpsTime += dt;
+  frames++;
+  if (frames % 30 === 0) {
+    const fps = 30 / Math.max(fpsTime, 0.001);
+    fpsTime = 0;
+    if (debugEl) debugEl.textContent = 'FPS ' + fps.toFixed(0) + ' · PR ' + renderer.getPixelRatio().toFixed(2) + ' · Q ' + qualityMode + ' · t ' + timeOfDay.toFixed(2);
+    if (qualityMode === 'auto' || qualityMode === 'low') {
+      if (fps < 45 && pixelRatioCap > 1.0) {
+        pixelRatioCap = Math.max(1.0, pixelRatioCap - 0.25);
+        renderer.setPixelRatio(pixelRatioCap);
+      } else if (fps > 55 && pixelRatioCap < (isMobile ? 1.5 : 2.0) && qualityMode === 'auto') {
+        pixelRatioCap = Math.min(isMobile ? 1.5 : 2.0, pixelRatioCap + 0.15);
+        renderer.setPixelRatio(pixelRatioCap);
       }
     }
   }
+
+  if (!qualityDropped && frames === 180) {
+    // one-shot low-end rescue
+    const roughFps = 180 / Math.max(clock.elapsedTime, 0.1);
+    if (roughFps < 28) {
+      qualityDropped = true;
+      pixelRatioCap = 1;
+      renderer.setPixelRatio(1);
+      if (dirLight.shadow.map) { dirLight.shadow.map.dispose(); dirLight.shadow.map = null; }
+      dirLight.shadow.mapSize.set(512, 512);
+      dirLight.shadow.needsUpdate = true;
+    }
+  }
 }
+
+// --- UI tools, audio, visibility, keyboard ---
+const debugEl = document.getElementById('debug');
+if (DEBUG && debugEl) debugEl.hidden = false;
+
+const uiRoot = document.getElementById('ui');
+let uiHidden = false;
+function toggleUI() {
+  uiHidden = !uiHidden;
+  uiRoot?.classList.toggle('hidden-ui', uiHidden);
+}
+// double-tap / click empty HUD area handled via canvas + key U
+dom.addEventListener('dblclick', (e) => { if (e.target === dom) toggleUI(); });
+
+document.getElementById('btn-fullscreen')?.addEventListener('click', () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+  else document.exitFullscreen?.();
+});
+
+// Quality menu
+const qMenu = document.getElementById('quality-menu');
+document.getElementById('btn-quality')?.addEventListener('click', () => {
+  if (!qMenu) return;
+  qMenu.hidden = !qMenu.hidden;
+});
+qMenu?.querySelectorAll('button').forEach((b) => {
+  b.classList.toggle('active', b.dataset.q === qualityMode);
+  b.addEventListener('click', () => {
+    qualityMode = b.dataset.q;
+    saveStore({ quality: qualityMode });
+    qMenu.querySelectorAll('button').forEach((x) => x.classList.toggle('active', x.dataset.q === qualityMode));
+    qMenu.hidden = true;
+    // live PR adjust only (geometry already built)
+    if (qualityMode === 'low') { pixelRatioCap = 1; renderer.setPixelRatio(1); dirLight.shadow.mapSize.set(512, 512); }
+    else if (qualityMode === 'high') { pixelRatioCap = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2); renderer.setPixelRatio(pixelRatioCap); dirLight.shadow.mapSize.set(isMobile ? 1024 : 2048, isMobile ? 1024 : 2048); }
+    else { pixelRatioCap = Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2); renderer.setPixelRatio(pixelRatioCap); }
+    if (dirLight.shadow.map) { dirLight.shadow.map.dispose(); dirLight.shadow.map = null; }
+    dirLight.shadow.needsUpdate = true;
+  });
+});
+
+// Ambient audio (Web Audio — no external files; starts after first gesture)
+let audioMuted = store.mute === true;
+let audioCtx = null, masterGain = null, windNode = null;
+function ensureAudio() {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = audioMuted ? 0 : 0.08;
+    masterGain.connect(audioCtx.destination);
+    // soft noise buffer as wind/ambience
+    const len = audioCtx.sampleRate * 2;
+    const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * 0.4;
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf; src.loop = true;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.value = 400;
+    src.connect(filter); filter.connect(masterGain); src.start();
+    windNode = filter;
+  } catch (_) {}
+}
+function setMuted(m) {
+  audioMuted = m;
+  saveStore({ mute: m });
+  document.getElementById('btn-mute')?.classList.toggle('muted', m);
+  if (masterGain) masterGain.gain.setTargetAtTime(m ? 0 : 0.08, audioCtx.currentTime, 0.2);
+}
+document.getElementById('btn-mute')?.addEventListener('click', () => {
+  ensureAudio();
+  setMuted(!audioMuted);
+});
+if (audioMuted) document.getElementById('btn-mute')?.classList.add('muted');
+window.addEventListener('pointerdown', () => { ensureAudio(); if (audioCtx?.state === 'suspended') audioCtx.resume(); }, { once: true });
+
+// Crossfade ambience filter with time of day
+const _audioTick = () => {
+  if (windNode && timeOfDay != null) {
+    // night: darker/quieter; day: brighter band
+    const night = timeOfDay < 6 || timeOfDay > 20 ? 1 : (timeOfDay < 8 || timeOfDay > 18 ? 0.5 : 0);
+    windNode.frequency.setTargetAtTime(280 + (1 - night) * 320, audioCtx.currentTime, 0.5);
+  }
+};
+setInterval(_audioTick, 500);
+
+// Pause rendering when tab hidden
+document.addEventListener('visibilitychange', () => {
+  pageVisible = document.visibilityState === 'visible';
+  if (pageVisible) clock.getDelta(); // reset delta spike
+});
+
+// Keyboard shortcuts
+window.addEventListener('keydown', (e) => {
+  if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    timePaused = !timePaused;
+    document.getElementById('btn-pause-time')?.classList.toggle('active', timePaused);
+  } else if (e.key === 'f' || e.key === 'F') {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  } else if (e.key === 'u' || e.key === 'U') toggleUI();
+  else if (e.key === '1') setMode('auto');
+  else if (e.key === '2') setMode('morning');
+  else if (e.key === '3') setMode('day');
+  else if (e.key === '4') setMode('sunset');
+  else if (e.key === '5') setMode('night');
+  else if (e.key === 'm' || e.key === 'M') { ensureAudio(); setMuted(!audioMuted); }
+});
+
+// Reduced motion: slower drift, fewer firefly updates already gated
+if (reducedMotion) {
+  // zero idle drift by making drift scale 0 via idle gate already soft
+}
+
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;

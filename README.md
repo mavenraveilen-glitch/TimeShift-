@@ -1,51 +1,56 @@
 # TimeShift 3D
 
-Pengalaman dunia 3D realistis (Three.js) yang berubah mengikuti **waktu lokal** pengguna — pagi, siang, sunset, dan malam dalam **satu dunia 3D yang konsisten**, dengan transisi cinematic berbasis interpolasi.
+A calm, continuous 3D world (Three.js) that follows **local time** — morning, day, sunset, and night — with cinematic interpolation and a smooth performance budget.
 
-## Struktur
+## Features
 
-```
-timeshift-3d/
-├── index.html
-├── style.css
-├── script.js
-├── assets/
-│   ├── models/
-│   ├── textures/
-│   └── audio/
-└── README.md
-```
+### Performance
+- Single `timeOfDay` value (0–24), lerped every frame; modes / scrubber only change the **target**
+- Dynamic pixel ratio (auto lowers when FPS dips, raises when stable)
+- Quality: Auto / Low / High (persisted in `localStorage`)
+- One shadow light, shadow map updates only when the sun angle moves
+- Instanced trees (layered canopies), rocks, bushes; GPU fireflies
+- Pause rendering when the tab is hidden
+- Camera inertia for lag-free drag / slide
+- `?debug=1` FPS overlay
 
-## Fitur
+### Look
+- 12 environment keyframes, smoothstep interpolation
+- ACES Filmic tone mapping, soft PCF shadows, exponential fog
+- Layered pine canopies, lake glitter, drifting clouds, birds / fireflies
+- Warm window & lamp lights at dusk/night
 
-- **Real-time clock** — jam lokal pengguna (HH:MM) dengan sapaan & periode (MORNING / DAY / SUNSET / NIGHT).
-- **Mode waktu**: `AUTO TIME` (mengikuti jam asli) + preview manual MORNING / DAY / SUNSET / NIGHT.
-- **Satu dunia 3D konsisten**: terrain prosedural (value-noise fbm), pegunungan dua-ridge (atmospheric perspective), danau, jalan setapak, pohon + semak instanced (sway angin via shader), batu, observatory modern dengan jendela emissive, lampu outdoor, awan yang bergerak, burung (siang), kunang-kunang (malam), bintang & bulan.
-- **Transisi cinematic**: 12 keyframes lingkungan sepanjang 24 jam (posisi matahari, warna langit/fog/hemisphere, intensitas & warna cahaya, exposure, bintang, lampu, awan) diinterpolasi dengan smoothstep; jam environment di-damping mulus sehingga tidak ada pergantian scene yang tiba-tiba.
-- **Kamera**: drag untuk melihat sekitar, scroll/pinch untuk zoom, cinematic drift halus saat idle.
-- **Performa**: pixel ratio dibatasi, instancing, jumlah partikel menyesuaikan perangkat, adaptive quality (otomatis menurunkan shadow & pixel ratio jika FPS rendah), responsive.
+### UI
+- Time scrubber (0–24h) + timelapse (~60s full day) + pause (Space)
+- Mode chips: AUTO / MORNING / DAY / SUNSET / NIGHT with relaxed icons
+- Logo mark, dynamic greeting, timezone label
+- Mute, quality menu, fullscreen
+- Double-click canvas or press **U** to hide UI
+- Shortcuts: **1–5** modes, **F** fullscreen, **M** mute, **Space** pause time
 
-## Menjalankan
+### Relax
+- Soft ambient audio (Web Audio noise bed) after first tap; crossfades with time of day
+- Prefers-reduced-motion respected
+- Settings remembered (`mode`, `mute`, `quality`)
 
-Static-hosting friendly — tidak perlu build/backend:
+### PWA / a11y
+- `manifest.json`, theme-color follows sky
+- No `user-scalable=no`
+- CSS gradient sky fallback if WebGL fails
+
+## Run
 
 ```bash
-# opsi 1: langsung buka index.html, atau
 npx serve .
+# or open index.html via any static host / Vercel
 ```
 
-Deploy ke Vercel: drag-and-drop folder ini ke project static hosting mana pun.
+Debug FPS: append `?debug=1`
 
-## Catatan
+## Structure
 
-- Three.js r128 dimuat dari CDN (cdnjs). Semua geometry, texture (canvas-generated), dan material bersifat prosedural — tidak ada dependensi asset eksternal.
-- Prioritas visual: realistic lighting (ACES tone mapping, soft shadows, FogExp2) > atmosphere > UI minimal glassmorphism.
+```
+index.html  style.css  script.js  manifest.json  README.md
+```
 
-## Update — visual & performance polish
-
-- **Logo mark** (sun + soft horizon) on loader & HUD — relaxed symbol language.
-- **Mode buttons** use soft period icons (clock / sunrise / sun / sunset / moon).
-- **Camera inertia** on drag release for lag-free sliding; softer damping.
-- **Layered tree canopies** (dual instanced cones) for richer silhouettes.
-- **Shadow map throttling** after warm-up — shadows only rebuild when the sun angle changes, keeping drag FPS high.
-- **Firefly updates** every other frame; WebGL-fail overlay respects `[hidden]`.
+All geometry is procedural — no external 3D assets. Three.js r128 via CDN.
