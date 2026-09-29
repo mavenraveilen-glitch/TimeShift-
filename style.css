@@ -88,7 +88,8 @@ html,body{height:100%;overflow:hidden;background:#060a14;font-family:var(--font-
 #loader-fill{width:0%;height:100%;background:linear-gradient(90deg,#ffc873,#ff9a5a);border-radius:2px;transition:width .4s ease}
 .loader-hint{font-size:10px;letter-spacing:.3em;color:var(--txt-dim)}
 
-#webgl-fail{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:#060a14;font-size:14px;letter-spacing:.1em}
+#webgl-fail{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:#060a14;font-size:14px;letter-spacing:.1em}
+#webgl-fail:not([hidden]){display:flex}
 
 /* ---------- Mobile ---------- */
 @media (max-width:640px){
