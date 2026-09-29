@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>TimeShift 3D — A World That Follows Your Time</title>
+<meta name="description" content="Pengalaman dunia 3D realistis yang berubah mengikuti waktu lokal pengguna." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Inter:wght@300;400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- 3D canvas di-append oleh Three.js ke #app -->
+  <div id="app" aria-hidden="true"></div>
+
+  <!-- Loading overlay -->
+  <div id="loader">
+    <div class="loader-inner">
+      <div class="loader-title">TIMESHIFT<span>3D</span></div>
+      <div class="loader-bar"><div id="loader-fill"></div></div>
+      <div class="loader-hint">Menyiapkan dunia…</div>
+    </div>
+  </div>
+
+  <!-- HUD: jam & salam -->
+  <header class="hud hud-clock" id="hud-clock">
+    <div class="clock-time" id="clock-time">--:--</div>
+    <div class="clock-greet" id="clock-greet">HELLO</div>
+    <div class="clock-sub"><span class="dot"></span><span id="clock-mode">LOCAL TIME</span> • <span id="clock-period">—</span></div>
+  </header>
+
+  <!-- HUD: hint kamera -->
+  <div class="hud hud-hint" id="hud-hint">DRAG TO EXPLORE&ensp;·&ensp;SCROLL / PINCH TO ZOOM</div>
+
+  <!-- HUD: mode waktu -->
+  <nav class="hud hud-modes" id="hud-modes" aria-label="Time mode">
+    <button class="mode-btn active" data-mode="auto">AUTO&nbsp;TIME</button>
+    <button class="mode-btn" data-mode="morning">MORNING</button>
+    <button class="mode-btn" data-mode="day">DAY</button>
+    <button class="mode-btn" data-mode="sunset">SUNSET</button>
+    <button class="mode-btn" data-mode="night">NIGHT</button>
+  </nav>
+
+  <div id="webgl-fail" hidden>
+    <p>WebGL tidak tersedia di perangkat/browser ini.</p>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
